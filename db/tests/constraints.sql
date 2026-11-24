@@ -1,7 +1,9 @@
 -- =====================================================================
 --  Database safety-rule and Row-Level Security tests.
 --  Runs inside a transaction that is ROLLED BACK at the end, so it
---  leaves no data behind.
+--  leaves no data behind. Counts only its own test rows (ids 9001+,
+--  'test.%' audit actions), so it is safe to run on a database that
+--  already holds real data.
 --  Run with:  npm run db:test
 -- =====================================================================
 \set ON_ERROR_STOP on
@@ -174,7 +176,7 @@ SELECT pg_temp.expect_fail('No identity: insert a student',
 SELECT pg_temp.act_as('hacker', '9001');
 SELECT pg_temp.expect_count('Made-up role with a school id sees nothing', 'SELECT count(*) FROM students', 0);
 SELECT pg_temp.act_as('super_admin', '9001');
-SELECT pg_temp.expect_count('super_admin with a school id still sees platform', 'SELECT count(*) FROM schools', 2);
+SELECT pg_temp.expect_count('super_admin with a school id still sees platform', 'SELECT count(*) FROM schools WHERE id IN (9001, 9002)', 2);
 
 \echo '--- RLS: School Admin of School A ---'
 SELECT pg_temp.act_as('school_admin', '9001');
@@ -226,9 +228,9 @@ SELECT pg_temp.expect_fail('Cannot write audit entry for School B',
 SELECT pg_temp.expect_fail('Cannot write platform-level audit entry',
   $q$INSERT INTO audit_logs (school_id, action) VALUES (NULL, 'test.fake')$q$);
 SELECT pg_temp.expect_count('Cannot edit audit entries',
-  $q$WITH u AS (UPDATE audit_logs SET action = 'x' RETURNING 1) SELECT count(*) FROM u$q$, 0);
+  $q$WITH u AS (UPDATE audit_logs SET action = 'x' WHERE action LIKE 'test.%' RETURNING 1) SELECT count(*) FROM u$q$, 0);
 SELECT pg_temp.expect_count('Cannot delete audit entries',
-  $q$WITH d AS (DELETE FROM audit_logs RETURNING 1) SELECT count(*) FROM d$q$, 0);
+  $q$WITH d AS (DELETE FROM audit_logs WHERE action LIKE 'test.%' RETURNING 1) SELECT count(*) FROM d$q$, 0);
 
 \echo '--- RLS: School Admin of School B (mirror check) ---'
 SELECT pg_temp.act_as('school_admin', '9002');
@@ -238,23 +240,23 @@ SELECT pg_temp.expect_count('School B data untouched by A''s attempts', $q$SELEC
 
 \echo '--- RLS: Super Admin ---'
 SELECT pg_temp.act_as('super_admin');
-SELECT pg_temp.expect_count('Sees all schools',           'SELECT count(*) FROM schools', 2);
-SELECT pg_temp.expect_count('Sees all students',          'SELECT count(*) FROM students', 4);
+SELECT pg_temp.expect_count('Sees all (test) schools',    'SELECT count(*) FROM schools WHERE id IN (9001, 9002)', 2);
+SELECT pg_temp.expect_count('Sees all (test) students',   'SELECT count(*) FROM students WHERE school_id IN (9001, 9002)', 4);
 SELECT pg_temp.expect_ok('Can edit a school',             $q$UPDATE schools SET name = 'Renamed A' WHERE id = 9001$q$);
 SELECT pg_temp.expect_ok('Can create a plan',
   $q$INSERT INTO plans (name, storage_limit_bytes, price_minor, currency, billing_period, updated_at) VALUES ('Gold', 1073741824, 500000, 'PKR', 'YEARLY', now())$q$);
-SELECT pg_temp.expect_count('Cannot see login sessions',  'SELECT count(*) FROM sessions', 0);
-SELECT pg_temp.expect_count('Reads the whole audit log',  'SELECT count(*) FROM audit_logs', 4);
+SELECT pg_temp.expect_count('Cannot see any login sessions', 'SELECT count(*) FROM sessions', 0);
+SELECT pg_temp.expect_count('Reads all (test) audit entries, any school', $q$SELECT count(*) FROM audit_logs WHERE action LIKE 'test.%'$q$, 4);
 SELECT pg_temp.expect_count('Cannot edit audit entries',
-  $q$WITH u AS (UPDATE audit_logs SET action = 'x' RETURNING 1) SELECT count(*) FROM u$q$, 0);
+  $q$WITH u AS (UPDATE audit_logs SET action = 'x' WHERE action LIKE 'test.%' RETURNING 1) SELECT count(*) FROM u$q$, 0);
 SELECT pg_temp.expect_count('Cannot delete audit entries',
-  $q$WITH d AS (DELETE FROM audit_logs RETURNING 1) SELECT count(*) FROM d$q$, 0);
+  $q$WITH d AS (DELETE FROM audit_logs WHERE action LIKE 'test.%' RETURNING 1) SELECT count(*) FROM d$q$, 0);
 
 \echo '--- RLS: internal system scope ---'
 SELECT pg_temp.act_as('system');
-SELECT pg_temp.expect_count('System can read sessions (for login checks)', 'SELECT count(*) FROM sessions', 1);
+SELECT pg_temp.expect_count('System can read sessions (for login checks)', $q$SELECT count(*) FROM sessions WHERE id = repeat('b', 64)$q$, 1);
 SELECT pg_temp.expect_count('Even system cannot delete audit entries',
-  $q$WITH d AS (DELETE FROM audit_logs RETURNING 1) SELECT count(*) FROM d$q$, 0);
+  $q$WITH d AS (DELETE FROM audit_logs WHERE action LIKE 'test.%' RETURNING 1) SELECT count(*) FROM d$q$, 0);
 
 -- Stop with an error if any check failed.
 DO $$

@@ -42,7 +42,7 @@ export function AppHeaderSkeleton() {
 function HeaderFrame({ children }: { children: React.ReactNode }) {
   return (
     <header className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
         {children}
       </div>
     </header>
