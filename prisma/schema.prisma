@@ -1,7 +1,22 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// =====================================================================
+//  Student Attendance SaaS - database schema
+//
+//  Conventions
+//  - Table/column names in the database are snake_case (@@map / @map),
+//    so raw SQL, reports and storage benchmarks stay readable.
+//  - Every school-owned table carries school_id (tenant isolation).
+//  - Nothing cascades on delete: student and attendance history is
+//    never removed automatically. Records are deactivated instead.
+//  - Timestamps are stored with time zone (timestamptz).
+//  - Money is stored in minor units (e.g. paisa/cents) as integers,
+//    never as floating point.
+//  - Storage sizes are stored in bytes (BigInt).
+//
+//  Not in this file yet (added in later phases via new migrations):
+//  - Login/session tables          -> Phase 3 (authentication)
+//  - Row-Level Security policies   -> Phase 3 (needs login context)
+//  - Notifications, platform settings -> Phase 13
+// =====================================================================
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +25,324 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------
+//  Enums
+// ---------------------------------------------------------------------
+
+enum SchoolStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("school_status")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+
+  @@map("user_role")
+}
+
+enum BillingPeriod {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+
+  @@map("billing_period")
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  EXPIRED
+  CANCELLED
+
+  @@map("subscription_status")
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHEQUE
+  ONLINE
+  OTHER
+
+  @@map("payment_method")
+}
+
+enum StudentStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("student_status")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+
+  @@map("attendance_status")
+}
+
+enum AttendanceSource {
+  QR_SCAN
+  MANUAL
+
+  @@map("attendance_source")
+}
+
+// ---------------------------------------------------------------------
+//  Platform level (managed by the Super Admin)
+// ---------------------------------------------------------------------
+
+/// A customer school (one tenant).
+model School {
+  id       Int          @id @default(autoincrement())
+  name     String       @db.VarChar(200)
+  /// Short unique name used in URLs, e.g. "green-valley-school".
+  slug     String       @unique @db.VarChar(80)
+  status   SchoolStatus @default(ACTIVE)
+  /// IANA time zone, e.g. "Asia/Karachi". Decides which calendar day a
+  /// scan belongs to. Chosen when the school is created.
+  timezone String       @db.VarChar(64)
+
+  contactEmail String? @map("contact_email") @db.VarChar(254)
+  contactPhone String? @map("contact_phone") @db.VarChar(40)
+  address      String? @db.VarChar(500)
+
+  /// Optional per-school quota that overrides the plan's limit.
+  storageQuotaOverrideBytes BigInt?   @map("storage_quota_override_bytes")
+  /// Last measured storage usage (recalculated by the storage engine).
+  storageUsedBytes          BigInt    @default(0) @map("storage_used_bytes")
+  storageCalculatedAt       DateTime? @map("storage_calculated_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users         User[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  classGroups   ClassGroup[]
+  students      Student[]
+  attendance    Attendance[]
+  auditLogs     AuditLog[]
+
+  @@map("schools")
+}
+
+/// A person who can log in: a Super Admin (no school) or a School Admin.
+model User {
+  id       Int      @id @default(autoincrement())
+  /// Null for Super Admins, required for School Admins (enforced by a
+  /// database CHECK constraint in the migration).
+  schoolId Int?     @map("school_id")
+  role     UserRole
+  /// Always stored lowercase (enforced by a CHECK constraint).
+  email    String   @unique @db.VarChar(254)
+  fullName String   @map("full_name") @db.VarChar(200)
+  isActive Boolean  @default(true) @map("is_active")
+
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  school           School?      @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  recordedPayments Payment[]
+  markedAttendance Attendance[]
+  auditLogs        AuditLog[]
+
+  @@index([schoolId])
+  @@map("users")
+}
+
+/// A subscription plan the Super Admin defines (e.g. "Basic - 500 MB").
+model Plan {
+  id                Int           @id @default(autoincrement())
+  name              String        @unique @db.VarChar(100)
+  description       String?       @db.VarChar(1000)
+  storageLimitBytes BigInt        @map("storage_limit_bytes")
+  /// Price in minor units (e.g. 250000 = 2,500.00).
+  priceMinor        Int           @map("price_minor")
+  /// ISO 4217 currency code, e.g. "PKR", "USD".
+  currency          String        @db.Char(3)
+  billingPeriod     BillingPeriod @map("billing_period")
+  /// Inactive plans stay attached to existing subscriptions but can't be
+  /// chosen for new ones.
+  isActive          Boolean       @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+/// A school's subscription to a plan for a period of time.
+/// Storage limit and price are COPIED from the plan when the
+/// subscription is created, so later plan edits never silently change
+/// what an existing customer gets. Only one TRIAL/ACTIVE subscription
+/// per school is allowed (partial unique index in the migration).
+model Subscription {
+  id       Int                @id @default(autoincrement())
+  schoolId Int                @map("school_id")
+  planId   Int                @map("plan_id")
+  status   SubscriptionStatus
+
+  storageLimitBytes BigInt @map("storage_limit_bytes")
+  priceMinor        Int    @map("price_minor")
+  currency          String @db.Char(3)
+
+  startsAt DateTime @map("starts_at") @db.Timestamptz(3)
+  endsAt   DateTime @map("ends_at") @db.Timestamptz(3)
+  notes    String?  @db.VarChar(1000)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  school   School    @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  plan     Plan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments Payment[]
+
+  @@unique([schoolId, id])
+  @@index([schoolId, status])
+  @@map("subscriptions")
+}
+
+/// A payment recorded manually by the Super Admin.
+model Payment {
+  id             Int           @id @default(autoincrement())
+  schoolId       Int           @map("school_id")
+  subscriptionId Int?          @map("subscription_id")
+  amountMinor    Int           @map("amount_minor")
+  currency       String        @db.Char(3)
+  method         PaymentMethod
+  /// Bank reference, receipt number, etc.
+  reference      String?       @db.VarChar(200)
+  paidOn         DateTime      @map("paid_on") @db.Date
+  notes          String?       @db.VarChar(1000)
+  recordedById   Int?          @map("recorded_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  school       School        @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  /// Composite link: the subscription must belong to the SAME school.
+  subscription Subscription? @relation(fields: [schoolId, subscriptionId], references: [schoolId, id], onDelete: Restrict)
+  recordedBy   User?         @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, paidOn])
+  @@map("payments")
+}
+
+// ---------------------------------------------------------------------
+//  School level (each row belongs to exactly one school)
+// ---------------------------------------------------------------------
+
+/// A class, section or group, e.g. "Grade 5 - A".
+model ClassGroup {
+  id        Int     @id @default(autoincrement())
+  schoolId  Int     @map("school_id")
+  name      String  @db.VarChar(100)
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  school   School    @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  students Student[]
+
+  @@unique([schoolId, name])
+  @@unique([schoolId, id])
+  @@map("class_groups")
+}
+
+model Student {
+  id           Int           @id @default(autoincrement())
+  schoolId     Int           @map("school_id")
+  /// The school's own student ID / admission number (shown on the card).
+  /// Unique within the school.
+  studentCode  String        @map("student_code") @db.VarChar(50)
+  fullName     String        @map("full_name") @db.VarChar(200)
+  classGroupId Int?          @map("class_group_id")
+  status       StudentStatus @default(ACTIVE)
+
+  /// Location of the optional photo in file storage (not the image itself).
+  photoKey   String? @map("photo_key") @db.VarChar(300)
+  /// Size of the stored photo, counted toward the storage quota.
+  photoBytes Int?    @map("photo_bytes")
+
+  /// Random, unguessable code printed in the QR. Contains no personal
+  /// data. Can be regenerated to cancel a lost card.
+  qrToken    String   @unique @map("qr_token") @db.VarChar(64)
+  qrIssuedAt DateTime @default(now()) @map("qr_issued_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  school     School       @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  /// Composite link: the class must belong to the SAME school.
+  classGroup ClassGroup?  @relation(fields: [schoolId, classGroupId], references: [schoolId, id], onDelete: Restrict)
+  attendance Attendance[]
+
+  @@unique([schoolId, studentCode])
+  @@unique([schoolId, id])
+  @@index([schoolId, classGroupId, fullName])
+  @@index([schoolId, fullName])
+  @@map("students")
+}
+
+/// One row per student per day (MVP rule: one attendance per day).
+/// This will be the largest table, so it is kept deliberately compact:
+/// no separate id column - the (student_id, date) pair is the key, which
+/// also prevents duplicate attendance for the same day.
+model Attendance {
+  studentId  Int              @map("student_id")
+  /// The school-local calendar date the attendance belongs to.
+  date       DateTime         @db.Date
+  schoolId   Int              @map("school_id")
+  status     AttendanceStatus
+  source     AttendanceSource
+  /// Exact moment it was recorded.
+  markedAt   DateTime         @default(now()) @map("marked_at") @db.Timestamptz(3)
+  /// Admin who marked/changed it manually (null for QR scans).
+  markedById Int?             @map("marked_by_id")
+
+  /// Composite link: the student must belong to the SAME school.
+  student  Student @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Restrict)
+  school   School  @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  markedBy User?   @relation(fields: [markedById], references: [id], onDelete: SetNull)
+
+  @@id([studentId, date])
+  @@index([schoolId, date])
+  @@map("attendance")
+}
+
+// ---------------------------------------------------------------------
+//  Audit trail
+// ---------------------------------------------------------------------
+
+/// Record of important actions (who did what, when). Never edited.
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  /// Null for platform-level actions by the Super Admin.
+  schoolId    Int?     @map("school_id")
+  actorUserId Int?     @map("actor_user_id")
+  /// e.g. "student.import", "attendance.update", "school.deactivate"
+  action      String   @db.VarChar(100)
+  entityType  String?  @map("entity_type") @db.VarChar(50)
+  entityId    String?  @map("entity_id") @db.VarChar(100)
+  /// Small extra details (never passwords or secrets).
+  details     Json?
+  ipAddress   String?  @map("ip_address") @db.VarChar(45)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  school School? @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
 }
