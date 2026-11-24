@@ -1,6 +1,6 @@
 import "server-only";
-import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/generated/prisma/client";
+import { createDbAdapter } from "@/lib/db-adapter";
 
 /**
  * One shared database client for the whole server.
@@ -16,8 +16,7 @@ function createPrismaClient() {
   if (!connectionString) {
     throw new Error("DATABASE_URL is not set. Copy .env.example to .env and fill it in.");
   }
-  const adapter = new PrismaPg({ connectionString });
-  return new PrismaClient({ adapter });
+  return new PrismaClient({ adapter: createDbAdapter(connectionString) });
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();

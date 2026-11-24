@@ -13,7 +13,6 @@
 //  - Storage sizes are stored in bytes (BigInt).
 //
 //  Not in this file yet (added in later phases via new migrations):
-//  - Login/session tables          -> Phase 3 (authentication)
 //  - Row-Level Security policies   -> Phase 3 (needs login context)
 //  - Notifications, platform settings -> Phase 13
 // =====================================================================
@@ -144,6 +143,14 @@ model User {
   fullName String   @map("full_name") @db.VarChar(200)
   isActive Boolean  @default(true) @map("is_active")
 
+  /// scrypt hash of the password (never the password itself).
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  /// Wrong-password counter for brute-force protection.
+  failedLoginCount  Int       @default(0) @map("failed_login_count")
+  /// While in the future, logins are refused (temporary lockout).
+  lockedUntil       DateTime? @map("locked_until") @db.Timestamptz(3)
+  passwordChangedAt DateTime  @default(now()) @map("password_changed_at") @db.Timestamptz(3)
+
   lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -152,6 +159,7 @@ model User {
   recordedPayments Payment[]
   markedAttendance Attendance[]
   auditLogs        AuditLog[]
+  sessions         Session[]
 
   @@index([schoolId])
   @@map("users")
@@ -318,6 +326,26 @@ model Attendance {
   @@id([studentId, date])
   @@index([schoolId, date])
   @@map("attendance")
+}
+
+/// A logged-in browser. The cookie holds a random token; only its
+/// SHA-256 hash is stored here, so a leaked database cannot be used to
+/// log in. Deleting a row logs that browser out immediately.
+model Session {
+  /// SHA-256 hash (hex) of the cookie token.
+  id        String   @id @db.Char(64)
+  userId    Int      @map("user_id")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  userAgent String?  @map("user_agent") @db.VarChar(300)
+
+  /// Sessions are disposable, so they are removed with their user.
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
 }
 
 // ---------------------------------------------------------------------

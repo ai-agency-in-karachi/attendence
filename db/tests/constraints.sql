@@ -78,13 +78,28 @@ SELECT pg_temp.expect_fail('Photo key without photo size',
 
 \echo '--- Users ---'
 SELECT pg_temp.expect_fail('School Admin without a school',
-  $q$INSERT INTO users (role, email, full_name, updated_at) VALUES ('SCHOOL_ADMIN', 'a@x.com', 'A', now())$q$);
+  $q$INSERT INTO users (role, email, full_name, password_hash, updated_at) VALUES ('SCHOOL_ADMIN', 'a@x.com', 'A', 'test-hash', now())$q$);
 SELECT pg_temp.expect_fail('Super Admin attached to a school',
-  $q$INSERT INTO users (role, school_id, email, full_name, updated_at) VALUES ('SUPER_ADMIN', 9001, 'b@x.com', 'B', now())$q$);
+  $q$INSERT INTO users (role, school_id, email, full_name, password_hash, updated_at) VALUES ('SUPER_ADMIN', 9001, 'b@x.com', 'B', 'test-hash', now())$q$);
 SELECT pg_temp.expect_fail('Email with capital letters',
-  $q$INSERT INTO users (role, school_id, email, full_name, updated_at) VALUES ('SCHOOL_ADMIN', 9001, 'Ali@X.com', 'C', now())$q$);
+  $q$INSERT INTO users (role, school_id, email, full_name, password_hash, updated_at) VALUES ('SCHOOL_ADMIN', 9001, 'Ali@X.com', 'C', 'test-hash', now())$q$);
 SELECT pg_temp.expect_ok('Two admins for the same school',
-  $q$INSERT INTO users (role, school_id, email, full_name, updated_at) VALUES ('SCHOOL_ADMIN', 9001, 'one@x.com', 'One', now()), ('SCHOOL_ADMIN', 9001, 'two@x.com', 'Two', now())$q$);
+  $q$INSERT INTO users (id, role, school_id, email, full_name, password_hash, updated_at) VALUES (9001, 'SCHOOL_ADMIN', 9001, 'one@x.com', 'One', 'test-hash', now()), (9002, 'SCHOOL_ADMIN', 9001, 'two@x.com', 'Two', 'test-hash', now())$q$);
+
+SELECT pg_temp.expect_fail('User without a password hash',
+  $q$INSERT INTO users (role, school_id, email, full_name, updated_at) VALUES ('SCHOOL_ADMIN', 9001, 'nopw@x.com', 'N', now())$q$);
+SELECT pg_temp.expect_fail('Negative failed-login counter',
+  $q$UPDATE users SET failed_login_count = -1 WHERE id = 9001$q$);
+
+\echo '--- Sessions ---'
+SELECT pg_temp.expect_ok('Session stored as a 64-char SHA-256 hash',
+  $q$INSERT INTO sessions (id, user_id, expires_at) VALUES (repeat('a', 64), 9002, now() + interval '7 days')$q$);
+SELECT pg_temp.expect_fail('Session id that is a raw token (not a hash)',
+  $q$INSERT INTO sessions (id, user_id, expires_at) VALUES ('raw-cookie-token-value-should-never-be-stored-here-xxxxxxxxxxxxx', 9001, now())$q$);
+SELECT pg_temp.expect_ok('Deleting a user removes their sessions automatically',
+  $q$DELETE FROM users WHERE id = 9002$q$);
+SELECT pg_temp.expect_fail('...and the session is really gone',
+  $q$DO $d$ BEGIN IF EXISTS (SELECT 1 FROM sessions WHERE user_id = 9002) THEN RAISE EXCEPTION 'still there'; END IF; RAISE EXCEPTION 'gone (expected)'; END $d$$q$);
 
 \echo '--- Schools, plans, subscriptions, payments ---'
 SELECT pg_temp.expect_fail('School slug with spaces/capitals',
