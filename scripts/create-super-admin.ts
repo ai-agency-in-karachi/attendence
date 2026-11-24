@@ -13,11 +13,13 @@ import "dotenv/config";
 import { createInterface } from "node:readline/promises";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { createDbAdapter } from "../src/lib/db-adapter";
+import { withSystemScope } from "../src/lib/db-scope";
 import { checkPasswordPolicy, hashPassword } from "../src/lib/auth/password";
 
 async function askHidden(prompt: string): Promise<string> {
   const { stdin, stdout } = process;
-  if (!stdin.isTTY) throw new Error("Password input needs an interactive terminal.");
+  if (!stdin.isTTY)
+    throw new Error("Password input needs an interactive terminal.");
   stdout.write(prompt);
   stdin.setRawMode(true);
   stdin.resume();
@@ -65,7 +67,10 @@ async function main() {
     let password = process.env.SUPER_ADMIN_PASSWORD ?? "";
 
     if (!email || !fullName) {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const rl = createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
       if (!email) email = await rl.question("Super Admin email: ");
       if (!fullName) fullName = await rl.question("Full name: ");
       rl.close();
@@ -76,7 +81,8 @@ async function main() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
       throw new Error("That doesn't look like a valid email address.");
     }
-    if (!fullName || fullName.length > 200) throw new Error("Please enter a name (max 200 characters).");
+    if (!fullName || fullName.length > 200)
+      throw new Error("Please enter a name (max 200 characters).");
 
     if (!password) {
       password = await askHidden("Password (min 10 characters): ");
@@ -86,25 +92,37 @@ async function main() {
     const policyError = checkPasswordPolicy(password);
     if (policyError) throw new Error(policyError);
 
-    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-    if (existing) throw new Error(`A user with email ${email} already exists. Nothing was changed.`);
+    const passwordHash = await hashPassword(password);
 
-    const user = await prisma.user.create({
-      data: {
-        role: "SUPER_ADMIN",
-        email,
-        fullName,
-        passwordHash: await hashPassword(password),
-      },
-      select: { id: true, email: true },
-    });
-    await prisma.auditLog.create({
-      data: {
-        action: "user.create_super_admin",
-        entityType: "user",
-        entityId: String(user.id),
-        details: { via: "cli" },
-      },
+    // One all-or-nothing transaction in system scope (Row-Level Security).
+    const user = await withSystemScope(prisma, async (tx) => {
+      const existing = await tx.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      if (existing)
+        throw new Error(
+          `A user with email ${email} already exists. Nothing was changed.`,
+        );
+
+      const created = await tx.user.create({
+        data: {
+          role: "SUPER_ADMIN",
+          email,
+          fullName,
+          passwordHash,
+        },
+        select: { id: true, email: true },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "user.create_super_admin",
+          entityType: "user",
+          entityId: String(created.id),
+          details: { via: "cli" },
+        },
+      });
+      return created;
     });
 
     console.log(`\n✔ Super Admin created: ${user.email} (id ${user.id})`);
@@ -114,6 +132,8 @@ async function main() {
 }
 
 main().catch((error: unknown) => {
-  console.error(`\n✖ ${error instanceof Error ? error.message : String(error)}`);
+  console.error(
+    `\n✖ ${error instanceof Error ? error.message : String(error)}`,
+  );
   process.exit(1);
 });

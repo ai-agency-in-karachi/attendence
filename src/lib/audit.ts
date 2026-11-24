@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/prisma";
+import { systemDb, type Tx } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 
 export type AuditEntry = {
@@ -20,18 +20,28 @@ export type AuditEntry = {
  */
 export async function writeAudit(entry: AuditEntry): Promise<void> {
   try {
-    await prisma.auditLog.create({
-      data: {
-        action: entry.action,
-        schoolId: entry.schoolId ?? null,
-        actorUserId: entry.actorUserId ?? null,
-        entityType: entry.entityType,
-        entityId: entry.entityId === undefined ? undefined : String(entry.entityId),
-        details: entry.details,
-        ipAddress: entry.ipAddress ?? null,
-      },
-    });
+    await systemDb((tx) => insertAudit(tx, entry));
   } catch (error) {
     console.error("Audit log write failed", entry.action, error);
   }
+}
+
+/**
+ * Writes an audit entry INSIDE an existing scoped transaction, so the
+ * entry is saved only if the main change is saved too (all-or-nothing).
+ * Within a school scope, the database only accepts entries for that school.
+ */
+export async function insertAudit(tx: Tx, entry: AuditEntry): Promise<void> {
+  await tx.auditLog.create({
+    data: {
+      action: entry.action,
+      schoolId: entry.schoolId ?? null,
+      actorUserId: entry.actorUserId ?? null,
+      entityType: entry.entityType,
+      entityId:
+        entry.entityId === undefined ? undefined : String(entry.entityId),
+      details: entry.details,
+      ipAddress: entry.ipAddress ?? null,
+    },
+  });
 }

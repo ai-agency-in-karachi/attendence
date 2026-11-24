@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { cookies, headers } from "next/headers";
-import { prisma } from "@/lib/prisma";
+import { systemDb } from "@/lib/db";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 
 /**
@@ -33,19 +33,18 @@ export async function createSession(userId: number): Promise<void> {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_MS);
   const h = await headers();
+  const ipAddress = await getClientIp();
+  const userAgent = h.get("user-agent")?.slice(0, 300) ?? null;
 
-  await prisma.session.create({
-    data: {
-      id: hashToken(token),
-      userId,
-      expiresAt,
-      ipAddress: await getClientIp(),
-      userAgent: h.get("user-agent")?.slice(0, 300) ?? null,
-    },
+  await systemDb(async (tx) => {
+    await tx.session.create({
+      data: { id: hashToken(token), userId, expiresAt, ipAddress, userAgent },
+    });
+    // Housekeeping: drop this user's expired sessions.
+    await tx.session.deleteMany({
+      where: { userId, expiresAt: { lt: new Date() } },
+    });
   });
-
-  // Housekeeping: drop this user's expired sessions.
-  await prisma.session.deleteMany({ where: { userId, expiresAt: { lt: new Date() } } });
 
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true, // JavaScript in the page cannot read it
@@ -61,22 +60,33 @@ export async function readSession() {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token || token.length > 100) return null;
 
-  const session = await prisma.session.findUnique({
-    where: { id: hashToken(token) },
-    include: {
-      user: {
-        select: {
-          id: true,
-          role: true,
-          email: true,
-          fullName: true,
-          isActive: true,
-          schoolId: true,
-          school: { select: { id: true, name: true, slug: true, status: true, timezone: true } },
+  // System scope: we don't know who the user is until this lookup finishes.
+  const session = await systemDb((tx) =>
+    tx.session.findUnique({
+      where: { id: hashToken(token) },
+      include: {
+        user: {
+          select: {
+            id: true,
+            role: true,
+            email: true,
+            fullName: true,
+            isActive: true,
+            schoolId: true,
+            school: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                status: true,
+                timezone: true,
+              },
+            },
+          },
         },
       },
-    },
-  });
+    }),
+  );
 
   if (!session || session.expiresAt <= new Date()) return null;
   return session;
@@ -89,15 +99,17 @@ export async function destroyCurrentSession(): Promise<number | null> {
   cookieStore.delete(SESSION_COOKIE);
   if (!token) return null;
 
-  const session = await prisma.session.findUnique({
-    where: { id: hashToken(token) },
-    select: { userId: true },
+  return systemDb(async (tx) => {
+    const session = await tx.session.findUnique({
+      where: { id: hashToken(token) },
+      select: { userId: true },
+    });
+    await tx.session.deleteMany({ where: { id: hashToken(token) } });
+    return session?.userId ?? null;
   });
-  await prisma.session.deleteMany({ where: { id: hashToken(token) } });
-  return session?.userId ?? null;
 }
 
 /** Logs a user out everywhere (e.g. after a password change or deactivation). */
 export async function destroyAllSessionsForUser(userId: number): Promise<void> {
-  await prisma.session.deleteMany({ where: { userId } });
+  await systemDb((tx) => tx.session.deleteMany({ where: { userId } }));
 }
