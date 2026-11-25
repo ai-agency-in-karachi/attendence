@@ -150,3 +150,97 @@ export function FormMessage({ state }: { state: { error?: string; message?: stri
 export function ariaFor(error: string | undefined, id: string) {
   return error ? ({ "aria-invalid": true, "aria-describedby": `${id}-error` } as const) : {};
 }
+
+export type Tone = "green" | "amber" | "red" | "slate" | "blue";
+
+/** Small colored label, e.g. subscription status. */
+export function Badge({ tone = "slate", children }: { tone?: Tone; children: ReactNode }) {
+  const tones: Record<Tone, string> = {
+    green: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+    amber: "bg-amber-50 text-amber-800 ring-amber-600/20",
+    red: "bg-red-50 text-red-700 ring-red-600/20",
+    slate: "bg-slate-100 text-slate-600 ring-slate-500/20",
+    blue: "bg-blue-50 text-blue-700 ring-blue-600/20",
+  };
+  return (
+    <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${tones[tone]}`}>
+      {children}
+    </span>
+  );
+}
+
+/** Table header cell / body cell styles used by every list. */
+export const th = "px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500 first:pl-5 last:pr-5";
+export const td = "px-3 py-3 first:pl-5 last:pr-5";
+
+export function EmptyState({ children }: { children: ReactNode }) {
+  return <div className="px-5 py-12 text-center text-sm text-slate-500">{children}</div>;
+}
+
+/** "Showing 1–20 of 135" + previous/next links. `href(page)` builds each page's URL. */
+export function Pagination({
+  page,
+  pageSize,
+  total,
+  href,
+  noun = "items",
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  href: (page: number) => string;
+  noun?: string;
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const linkCls = "rounded-md border border-slate-300 px-3 py-1 hover:bg-slate-50";
+  const offCls = "rounded-md border border-slate-200 px-3 py-1 text-slate-300";
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3 text-sm text-slate-600">
+      <span>
+        {total === 0
+          ? `0 ${noun}`
+          : `Showing ${((page - 1) * pageSize + 1).toLocaleString("en-US")}–${Math.min(page * pageSize, total).toLocaleString("en-US")} of ${total.toLocaleString("en-US")}`}
+      </span>
+      {pages > 1 && (
+        <div className="flex items-center gap-2">
+          {page > 1 ? <Link href={href(page - 1)} className={linkCls}>← Previous</Link> : <span className={offCls}>← Previous</span>}
+          <span>
+            Page {page} of {pages}
+          </span>
+          {page < pages ? <Link href={href(page + 1)} className={linkCls}>Next →</Link> : <span className={offCls}>Next →</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One labelled number in a row of stats. */
+export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: ReactNode }) {
+  return (
+    <Card className="px-4 py-3">
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">{value}</dd>
+      {hint && <dd className="mt-0.5 text-xs text-slate-500">{hint}</dd>}
+    </Card>
+  );
+}
+
+/** Breadcrumb trail: [["Schools", "/super-admin/schools"], ["Green Valley"]] */
+export function Crumbs({ items }: { items: [string, string?][] }) {
+  return (
+    <>
+      {items.map(([label, href], i) => (
+        <span key={i}>
+          {i > 0 && " / "}
+          {href ? (
+            <Link href={href} className="text-blue-700 hover:underline">
+              {label}
+            </Link>
+          ) : (
+            label
+          )}
+        </span>
+      ))}
+    </>
+  );
+}

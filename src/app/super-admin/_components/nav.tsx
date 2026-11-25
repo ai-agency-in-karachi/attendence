@@ -6,9 +6,13 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/super-admin", label: "Dashboard", exact: true },
   { href: "/super-admin/schools", label: "Schools" },
+  { href: "/super-admin/plans", label: "Plans" },
+  { href: "/super-admin/subscriptions", label: "Subscriptions" },
+  { href: "/super-admin/payments", label: "Payments" },
+  { href: "/super-admin/storage", label: "Storage" },
 ] as const;
 
-const COMING_SOON = ["Plans", "Subscriptions", "Payments", "Storage", "Settings"];
+const COMING_SOON = ["Settings"];
 
 /** Left-hand menu of the Super Admin panel (a top bar on small screens). */
 export function SuperAdminNav() {

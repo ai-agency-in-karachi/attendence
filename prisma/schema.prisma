@@ -127,6 +127,7 @@ model School {
   students      Student[]
   attendance    Attendance[]
   auditLogs     AuditLog[]
+  studentPhotos StudentPhoto[]
 
   @@map("schools")
 }
@@ -294,12 +295,35 @@ model Student {
   /// Composite link: the class must belong to the SAME school.
   classGroup ClassGroup?  @relation(fields: [schoolId, classGroupId], references: [schoolId, id], onDelete: Restrict)
   attendance Attendance[]
+  photo      StudentPhoto?
 
   @@unique([schoolId, studentCode])
   @@unique([schoolId, id])
   @@index([schoolId, classGroupId, fullName])
   @@index([schoolId, fullName])
   @@map("students")
+}
+
+/// A student's (small, resized) photo, kept in the database so no
+/// separate file storage service is needed. Counted toward the quota.
+/// Student.photoKey/photoBytes mirror it (photoKey changes on every new
+/// upload so browsers never show a stale cached image).
+model StudentPhoto {
+  studentId   Int      @id @map("student_id")
+  schoolId    Int      @map("school_id")
+  /// image/jpeg, image/png or image/webp
+  contentType String   @map("content_type") @db.VarChar(30)
+  bytes       Int
+  data        Bytes
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// Composite link: the student must belong to the SAME school.
+  student Student @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Restrict)
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+
+  @@unique([schoolId, studentId])
+  @@index([schoolId])
+  @@map("student_photos")
 }
 
 /// One row per student per day (MVP rule: one attendance per day).

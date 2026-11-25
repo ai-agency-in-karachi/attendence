@@ -7,11 +7,18 @@ import { platformDb } from "@/lib/db";
 import { PLATFORM_TIME_ZONE } from "@/lib/platform";
 import { utcOffsetLabel } from "@/lib/timezones";
 import { PageSkeleton } from "@/components/page-skeleton";
-import { Alert, Card, CardHeader, PageHeader, StatusBadge, formatDateTime } from "@/components/ui";
+import { Alert, Card, CardHeader, PageHeader, StatusBadge, formatDate, formatDateTime } from "@/components/ui";
 import { StatusControl } from "./status-control";
 import { AddAdminForm, AdminRowActions } from "./admin-controls";
 import { ButtonLink } from "@/components/ui";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatMoney } from "@/lib/format";
+import { storageStatus } from "@/lib/storage";
+import { PAYMENT_METHOD_LABEL, PERIOD_LABEL, isCurrent, minorToInput } from "@/lib/billing";
+import { dbToDateOnly, todayInZone } from "@/lib/dates";
+import { SubscriptionBadge, StorageMeter } from "@/components/billing-ui";
+import { ActionButton } from "@/components/action-button";
+import { AssignPlanForm, RecordPaymentForm } from "./billing-forms";
+import { cancelSubscription, extendSubscription } from "../../billing/actions";
 
 export const metadata: Metadata = { title: "School" };
 
@@ -33,8 +40,8 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
   const schoolId = /^\d{1,9}$/.test(id) ? Number(id) : NaN;
   if (!Number.isSafeInteger(schoolId)) notFound();
 
-  const school = await platformDb(user, (tx) =>
-    tx.school.findUnique({
+  const data = await platformDb(user, async (tx) => {
+    const school = await tx.school.findUnique({
       where: { id: schoolId },
       include: {
         users: {
@@ -42,10 +49,25 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
           select: { id: true, fullName: true, email: true, isActive: true, lastLoginAt: true, createdAt: true },
         },
         _count: { select: { students: true, classGroups: true } },
+        subscriptions: {
+          orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+          take: 6,
+          include: { plan: { select: { name: true, billingPeriod: true } } },
+        },
+        payments: { orderBy: [{ paidOn: "desc" }, { id: "desc" }], take: 10 },
       },
-    }),
-  );
-  if (!school) notFound();
+    });
+    if (!school) return null;
+    const [plans, storage] = await Promise.all([
+      tx.plan.findMany({ where: { isActive: true }, orderBy: { storageLimitBytes: "asc" } }),
+      storageStatus(tx, school.id),
+    ]);
+    return { school, plans, storage };
+  });
+  if (!data) notFound();
+  const { school, plans, storage } = data;
+  const current = school.subscriptions.find((s) => s.status === "ACTIVE" || s.status === "TRIAL");
+  const today = todayInZone(school.timezone);
 
   const details: [string, string][] = [
     ["Web name", school.slug],
@@ -165,10 +187,104 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
                 <dd className="text-xl font-semibold tabular-nums">{school._count.classGroups}</dd>
               </div>
               <div className="col-span-2">
-                <dt className="text-xs text-slate-500">Storage used</dt>
-                <dd className="text-sm text-slate-700">Measured from Phase 8 (storage engine)</dd>
+                <dt className="mb-1 text-xs text-slate-500">Storage used</dt>
+                <dd>
+                  {storage.quota.limit === null ? (
+                    <span className="text-sm text-slate-700">{formatBytes(storage.total)} used · no plan or custom quota</span>
+                  ) : (
+                    <StorageMeter status={storage} />
+                  )}
+                </dd>
               </div>
             </dl>
+          </Card>
+
+          <Card>
+            <CardHeader title="Subscription" />
+            <div className="space-y-4 p-5">
+              {current ? (
+                <dl className="space-y-1 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <dt className="sr-only">Plan</dt>
+                    <dd className="font-medium text-slate-900">{current.plan.name}</dd>
+                    <SubscriptionBadge sub={current} />
+                  </div>
+                  <dd className="text-slate-600">
+                    {formatMoney(current.priceMinor, current.currency)} / {PERIOD_LABEL[current.plan.billingPeriod].toLowerCase()} ·{" "}
+                    {formatBytes(current.storageLimitBytes)}
+                  </dd>
+                  <dd className="text-slate-600">
+                    {formatDate(current.startsAt, school.timezone)} → {formatDate(current.endsAt, school.timezone)}
+                  </dd>
+                </dl>
+              ) : (
+                <p className="text-sm text-slate-600">
+                  No current subscription.{" "}
+                  {school.storageQuotaOverrideBytes ? "The custom quota applies." : "The school cannot add students until it has a plan or a custom quota."}
+                </p>
+              )}
+              <AssignPlanForm
+                schoolId={school.id}
+                today={today}
+                hasCurrent={!!current}
+                plans={plans.map((p) => ({
+                  id: p.id,
+                  label: `${p.name} — ${formatBytes(p.storageLimitBytes)}, ${formatMoney(p.priceMinor, p.currency)} / ${PERIOD_LABEL[p.billingPeriod].toLowerCase()}`,
+                }))}
+              />
+              {current && (
+                <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                  <ActionButton action={extendSubscription} fields={{ schoolId: school.id }} label="Extend one period" confirm="Extend without recording a payment?" />
+                  <ActionButton action={cancelSubscription} fields={{ schoolId: school.id }} label="End subscription" variant="danger" confirm="End it now?" />
+                </div>
+              )}
+              {school.subscriptions.filter((s) => s !== current).length > 0 && (
+                <details className="border-t border-slate-100 pt-3 text-sm">
+                  <summary className="cursor-pointer text-slate-600">Earlier subscriptions</summary>
+                  <ul className="mt-2 space-y-1.5">
+                    {school.subscriptions
+                      .filter((s) => s !== current)
+                      .map((s) => (
+                        <li key={s.id} className="flex flex-wrap items-center gap-2 text-slate-600">
+                          {s.plan.name} · {formatDate(s.startsAt, school.timezone)} → {formatDate(s.endsAt, school.timezone)}
+                          <SubscriptionBadge sub={s} />
+                        </li>
+                      ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader title="Payments" actions={<Link href={`/super-admin/payments?school=${school.id}`} className="text-sm text-blue-700 hover:underline">All</Link>} />
+            <div className="space-y-4 p-5">
+              {school.payments.length === 0 ? (
+                <p className="text-sm text-slate-500">No payments recorded yet.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100 text-sm">
+                  {school.payments.map((p) => (
+                    <li key={p.id} className="flex items-baseline justify-between gap-3 py-2">
+                      <div>
+                        <div className="font-medium tabular-nums text-slate-900">{formatMoney(p.amountMinor, p.currency)}</div>
+                        <div className="text-xs text-slate-500">
+                          {PAYMENT_METHOD_LABEL[p.method]}
+                          {p.reference && ` · ${p.reference}`}
+                        </div>
+                      </div>
+                      <span className="whitespace-nowrap text-xs text-slate-500">{dbToDateOnly(p.paidOn)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <RecordPaymentForm
+                schoolId={school.id}
+                today={today}
+                hasCurrent={!!current && isCurrent(current)}
+                currency={current?.currency ?? "PKR"}
+                amount={current ? minorToInput(current.priceMinor) : ""}
+              />
+            </div>
           </Card>
 
           <Card>

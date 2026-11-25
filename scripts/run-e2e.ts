@@ -35,8 +35,13 @@ async function main() {
         .sort()
         .map((f) => `tests/e2e/${f}`);
 
+  // A server left over from an older build would answer with stale code.
+  if (await fetch(`http://localhost:${PORT}/api/health`).then(() => true, () => false)) {
+    throw new Error(`Port ${PORT} is already in use by an old app server. Stop it first.`);
+  }
   await cleanup();
-  const server = spawn("npx", ["next", "start", "-p", PORT], { stdio: ["ignore", "ignore", "inherit"] });
+  // detached = own process group, so we can stop npx AND the server it starts.
+  const server = spawn("npx", ["next", "start", "-p", PORT], { stdio: ["ignore", "ignore", "inherit"], detached: true });
   let code = 1;
   try {
     await waitForHealth();
@@ -48,7 +53,11 @@ async function main() {
       t.on("exit", (c) => resolve(c ?? 1));
     });
   } finally {
-    server.kill("SIGTERM");
+    try {
+      process.kill(-server.pid!, "SIGTERM");
+    } catch {
+      server.kill("SIGTERM");
+    }
     await cleanup();
     await db.$disconnect();
   }
