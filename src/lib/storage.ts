@@ -135,3 +135,9 @@ export async function saveUsage(schoolId: number, totalBytes: number): Promise<v
     console.error("saveUsage failed", schoolId, error);
   }
 }
+
+/** Saves a fresh measurement when the stored one is older than 10 minutes. */
+export async function saveUsageIfStale(schoolId: number, calculatedAt: Date | null, totalBytes: number): Promise<void> {
+  if (calculatedAt && Date.now() - calculatedAt.getTime() < 10 * 60_000) return;
+  await saveUsage(schoolId, totalBytes);
+}

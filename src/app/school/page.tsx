@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { requireSchoolAdmin } from "@/lib/auth/dal";
 import { schoolDb } from "@/lib/db";
 import { percent } from "@/lib/format";
-import { storageStatus } from "@/lib/storage";
+import { saveUsageIfStale, storageStatus } from "@/lib/storage";
 import { isCurrent } from "@/lib/billing";
 import { addDays, dateOnlyLabel, dateOnlyToDb, dbToDateOnly, timeInZone, todayInZone, weekday } from "@/lib/dates";
 import { PageSkeleton } from "@/components/page-skeleton";
@@ -31,7 +31,7 @@ async function Dashboard() {
   const weekStart = addDays(today, -6);
 
   const d = await schoolDb(user, async (tx) => {
-    const [active, inactive, classes, todayRows, week, recent, storage, subscription] = await Promise.all([
+    const [active, inactive, classes, todayRows, week, recent, storage, subscription, cached] = await Promise.all([
       tx.student.count({ where: { status: "ACTIVE" } }),
       tx.student.count({ where: { status: "INACTIVE" } }),
       tx.classGroup.count({ where: { isActive: true } }),
@@ -56,9 +56,12 @@ async function Dashboard() {
         where: { status: { in: ["ACTIVE", "TRIAL"] } },
         include: { plan: { select: { name: true } } },
       }),
+      tx.school.findUnique({ where: { id: user.school.id }, select: { storageCalculatedAt: true } }),
     ]);
-    return { active, inactive, classes, todayRows, week, recent, storage, subscription };
+    return { active, inactive, classes, todayRows, week, recent, storage, subscription, cached };
   });
+  // Keep the Super Admin's storage overview fresh (attendance grows every day).
+  await saveUsageIfStale(user.school.id, d.cached?.storageCalculatedAt ?? null, d.storage.total);
 
   const present = d.todayRows.find((r) => r.status === "PRESENT")?._count._all ?? 0;
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));

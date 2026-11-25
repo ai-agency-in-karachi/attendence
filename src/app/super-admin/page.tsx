@@ -5,7 +5,11 @@ import { requireSuperAdmin } from "@/lib/auth/dal";
 import { platformDb } from "@/lib/db";
 import { PLATFORM_TIME_ZONE } from "@/lib/platform";
 import { PageSkeleton } from "@/components/page-skeleton";
-import { ButtonLink, Card, CardHeader, PageHeader, StatusBadge, formatDate, formatDateTime } from "@/components/ui";
+import { Badge, ButtonLink, Card, CardHeader, PageHeader, StatusBadge, formatDate, formatDateTime, type Tone } from "@/components/ui";
+import type { Tx } from "@/lib/db";
+import { daysLeft, isCurrent } from "@/lib/billing";
+import { formatBytes } from "@/lib/format";
+import { WARN_AT } from "@/lib/storage";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -79,7 +83,8 @@ async function Dashboard() {
       }),
     ]);
     const count = (s: "ACTIVE" | "INACTIVE") => byStatus.find((r) => r.status === s)?._count._all ?? 0;
-    return { active: count("ACTIVE"), inactive: count("INACTIVE"), students, admins, recentSchools, activity };
+    const attention = await needsAttention(tx);
+    return { active: count("ACTIVE"), inactive: count("INACTIVE"), students, admins, recentSchools, activity, attention };
   });
 
   const stats = [
@@ -108,6 +113,23 @@ async function Dashboard() {
           </Card>
         ))}
       </dl>
+
+      {data.attention.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader title={`Needs attention (${data.attention.length})`} />
+          <ul className="divide-y divide-slate-100">
+            {data.attention.slice(0, 10).map((item) => (
+              <li key={`${item.schoolId}-${item.kind}`} className="flex flex-wrap items-center gap-3 px-5 py-2.5 text-sm">
+                <Badge tone={item.tone}>{item.label}</Badge>
+                <Link href={`/super-admin/schools/${item.schoolId}`} className="font-medium text-slate-900 hover:underline">
+                  {item.schoolName}
+                </Link>
+                <span className="text-slate-500">{item.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Card>
@@ -177,4 +199,49 @@ async function Dashboard() {
       </div>
     </>
   );
+}
+
+type Attention = { kind: string; schoolId: number; schoolName: string; label: string; detail: string; tone: Tone };
+
+/** Active schools whose subscription is ending/ended or whose storage is (nearly) full. */
+async function needsAttention(tx: Tx): Promise<Attention[]> {
+  const now = new Date();
+  const schools = await tx.school.findMany({
+    where: { status: "ACTIVE" },
+    select: {
+      id: true,
+      name: true,
+      storageUsedBytes: true,
+      storageQuotaOverrideBytes: true,
+      subscriptions: {
+        where: { status: { in: ["ACTIVE", "TRIAL"] } },
+        select: { status: true, startsAt: true, endsAt: true, storageLimitBytes: true },
+      },
+    },
+    take: 1000,
+  });
+  const out: Attention[] = [];
+  for (const s of schools) {
+    const sub = s.subscriptions[0];
+    const current = sub && isCurrent(sub, now) ? sub : null;
+    if (!current && !s.storageQuotaOverrideBytes) {
+      out.push({ kind: "sub", schoolId: s.id, schoolName: s.name, label: sub ? "Subscription ended" : "No subscription", detail: "Cannot add students.", tone: "red" });
+    } else if (current && daysLeft(current.endsAt, now) <= 14) {
+      const left = daysLeft(current.endsAt, now);
+      out.push({ kind: "sub", schoolId: s.id, schoolName: s.name, label: "Ending soon", detail: `${left} day${left === 1 ? "" : "s"} left`, tone: "amber" });
+    }
+    const limit = Number(s.storageQuotaOverrideBytes ?? current?.storageLimitBytes ?? 0);
+    const used = Number(s.storageUsedBytes);
+    if (limit > 0 && used >= limit * WARN_AT) {
+      out.push({
+        kind: "storage",
+        schoolId: s.id,
+        schoolName: s.name,
+        label: used >= limit ? "Storage full" : "Storage 80%+",
+        detail: `${formatBytes(used)} of ${formatBytes(limit)}`,
+        tone: used >= limit ? "red" : "amber",
+      });
+    }
+  }
+  return out.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "red" ? -1 : 1));
 }
