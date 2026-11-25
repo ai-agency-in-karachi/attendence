@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Student Attendance SaaS
 
-## Getting Started
+A multi-school attendance system. A **Super Admin** runs the platform: schools, School Admin logins, plans, subscriptions, payments and storage. Each **School Admin** manages only their own school: students, classes, Excel import, printable QR ID cards, QR attendance scanning and the monthly register.
 
-First, run the development server:
+Every school's data is walled off twice: in the application code, and by **PostgreSQL Row-Level Security**. The database itself refuses to show or change another school's rows.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Tech
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Next.js 16 (App Router, Server Actions) · React 19 · Prisma 7 · PostgreSQL · Tailwind CSS 4 · Zod.
+Small helpers: `qrcode` (QR images), `jsqr` (camera decoding fallback), `read-excel-file` / `write-excel-file` (import + template).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Local setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. PostgreSQL running locally with the `attendance_dev` and `attendance_shadow` databases (see `.env.example`).
+2. `cp .env.example .env` and fill in the connection strings.
+3. `npm install`
+4. `npm run db:deploy` to apply all migrations (including Row-Level Security).
+5. `npm run create-super-admin` to create the first Super Admin login (asks for the details).
+6. `npm run dev` and open http://localhost:3000
 
-## Learn More
+## Checks
 
-To learn more about Next.js, take a look at the following resources:
+| Command | What it checks |
+| --- | --- |
+| `npm run typecheck` | TypeScript |
+| `npm run lint` | ESLint |
+| `npm run db:test` | Database safety rules and Row-Level Security (runs in a transaction that is rolled back) |
+| `npm run build && npm run test:e2e` | End-to-end tests against a production build on port 3123. Test data is marked and removed afterwards. |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Main areas
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Path | Who | What |
+| --- | --- | --- |
+| `/super-admin` | Super Admin | Dashboard, "needs attention" list, recent activity |
+| `/super-admin/schools` | Super Admin | Create/edit schools, School Admins, subscription, payments |
+| `/super-admin/plans`, `/subscriptions`, `/payments`, `/storage` | Super Admin | Billing and storage overview |
+| `/school` | School Admin | Dashboard: present today, 7-day chart, storage, subscription |
+| `/school/scan` | School Admin | QR attendance: camera, or a USB/Bluetooth handheld scanner |
+| `/school/attendance` | School Admin | Monthly register, manual edits, CSV export |
+| `/school/students`, `/classes`, `/import`, `/cards` | School Admin | Students, classes, Excel/CSV import, printable cards |
 
-## Deploy on Vercel
+## Important rules
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **QR codes** contain only a random token (`ATT1:<token>`), never personal data. Issuing a new code makes the old card stop working.
+- **One attendance per student per day**, using the school's own time zone. The database key enforces this, so simultaneous scans can't double-count.
+- **Storage quota** = the school's custom quota, otherwise its current plan's limit. When it is full, or there is no active plan, new students, imports and photos are blocked. **Taking attendance is never blocked.**
+- **Students are never deleted once they have attendance history.** Deactivate them instead.
+- Imports are all-or-nothing and are re-checked on import, even after a preview.
+- Photos are resized in the browser and stored in the database (`student_photos`), so no extra file storage service is needed.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Not done yet
+
+- Deployment: Vercel, plus a separate non-owner database role for the running app (see the project notes).
+- Notifications and platform settings.

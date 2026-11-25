@@ -190,7 +190,7 @@ export function Scanner({ initialCount, schoolTimeZone }: { initialCount: number
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-5">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
       <div className="space-y-4 lg:col-span-3">
         <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-900">
           <video ref={videoRef} muted playsInline className={`h-full w-full object-cover ${camera === "on" ? "" : "invisible"}`} />

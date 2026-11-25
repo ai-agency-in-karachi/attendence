@@ -92,7 +92,7 @@ async function Dashboard() {
           <Stat label="Classes" value={d.classes} />
         </dl>
 
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader title="Present in the last 7 days" actions={<Link href="/school/attendance" className="text-sm text-blue-700 hover:underline">Open register</Link>} />
             <div className="flex h-44 items-end gap-2 px-5 pb-4 pt-6" role="img" aria-label="Students present per day for the last 7 days">

@@ -69,6 +69,16 @@ INSERT INTO students (id, school_id, student_code, full_name, class_group_id, qr
   (9002, 9002, 'B-001', 'Student B', 9002, 'tokenBBBBBBBBBBBBBBBBBB', now());
 INSERT INTO plans (id, name, storage_limit_bytes, price_minor, currency, billing_period, updated_at) VALUES
   (9001, 'Test Plan', 524288000, 250000, 'PKR', 'MONTHLY', now());
+\echo '--- Student photos ---'
+SELECT pg_temp.expect_fail('Photo of a School B student filed under School A',
+  $q$INSERT INTO student_photos (student_id, school_id, content_type, bytes, data) VALUES (9002, 9001, 'image/jpeg', 1, '\xff')$q$);
+INSERT INTO student_photos (student_id, school_id, content_type, bytes, data) VALUES
+  (9001, 9001, 'image/jpeg', 4, '\xffd8ffe0'),
+  (9002, 9002, 'image/jpeg', 4, '\xffd8ffe0');
+SELECT pg_temp.expect_fail('Photo must be an image type',
+  $q$UPDATE student_photos SET content_type = 'text/html' WHERE student_id = 9001$q$);
+SELECT pg_temp.expect_fail('Photo size must match its data',
+  $q$UPDATE student_photos SET bytes = 999 WHERE student_id = 9001$q$);
 
 \echo '--- Tenant isolation (cross-school links) ---'
 SELECT pg_temp.expect_fail('Attendance for School B student filed under School A',
@@ -171,6 +181,7 @@ SELECT pg_temp.expect_count('No identity: students visible', 'SELECT count(*) FR
 SELECT pg_temp.expect_count('No identity: users visible',    'SELECT count(*) FROM users', 0);
 SELECT pg_temp.expect_count('No identity: sessions visible', 'SELECT count(*) FROM sessions', 0);
 SELECT pg_temp.expect_count('No identity: audit log visible','SELECT count(*) FROM audit_logs', 0);
+SELECT pg_temp.expect_count('No identity: photos visible',  'SELECT count(*) FROM student_photos', 0);
 SELECT pg_temp.expect_fail('No identity: insert a student',
   $q$INSERT INTO students (school_id, student_code, full_name, qr_token, updated_at) VALUES (9001, 'N-1', 'X', 'tokenNNNNNNNNNNNNNNNNNN', now())$q$);
 SELECT pg_temp.act_as('hacker', '9001');
@@ -184,6 +195,10 @@ SELECT pg_temp.expect_count('Sees only own school row',              'SELECT cou
 SELECT pg_temp.expect_count('Sees only own students',                'SELECT count(*) FROM students', 1);
 SELECT pg_temp.expect_count('Cannot read School B student by id',    'SELECT count(*) FROM students WHERE id = 9002', 0);
 SELECT pg_temp.expect_count('Cannot see School B attendance',        'SELECT count(*) FROM attendance WHERE school_id = 9002', 0);
+SELECT pg_temp.expect_count('Sees only own student photos',          'SELECT count(*) FROM student_photos', 1);
+SELECT pg_temp.expect_count('Cannot read School B photo',            'SELECT count(*) FROM student_photos WHERE student_id = 9002', 0);
+SELECT pg_temp.expect_count('Deleting School B photo changes nothing',
+  $q$WITH d AS (DELETE FROM student_photos WHERE student_id = 9002 RETURNING 1) SELECT count(*) FROM d$q$, 0);
 SELECT pg_temp.expect_count('Sees only own school''s admins',         'SELECT count(*) FROM users WHERE school_id IS DISTINCT FROM 9001', 0);
 SELECT pg_temp.expect_count('Cannot see Super Admin accounts',        $q$SELECT count(*) FROM users WHERE role = 'SUPER_ADMIN'$q$, 0);
 SELECT pg_temp.expect_count('Sees own subscriptions only',            'SELECT count(*) FROM subscriptions WHERE school_id <> 9001', 0);
@@ -197,6 +212,8 @@ SELECT pg_temp.expect_ok('Can mark own student''s attendance',
   $q$INSERT INTO attendance (student_id, date, school_id, status, source) VALUES (9001, '2026-11-26', 9001, 'PRESENT', 'QR_SCAN')$q$);
 SELECT pg_temp.expect_fail('Cannot add a student to School B',
   $q$INSERT INTO students (school_id, student_code, full_name, qr_token, updated_at) VALUES (9002, 'B-100', 'Evil', 'tokenFFFFFFFFFFFFFFFFFF', now())$q$);
+SELECT pg_temp.expect_fail('Cannot store a photo for School B',
+  $q$INSERT INTO student_photos (student_id, school_id, content_type, bytes, data) VALUES (9002, 9002, 'image/png', 1, '\x89')$q$);
 SELECT pg_temp.expect_fail('Cannot mark School B attendance',
   $q$INSERT INTO attendance (student_id, date, school_id, status, source) VALUES (9002, '2026-11-26', 9002, 'PRESENT', 'QR_SCAN')$q$);
 SELECT pg_temp.expect_fail('Cannot move own student into School B',

@@ -48,7 +48,7 @@ async function Content({ params }: PageProps<"/school/students/[id]/card">) {
         )}
       </div>
       <div className="flex justify-center py-6 print:block print:py-0">
-        <div className="origin-top scale-125 print:scale-100">
+        <div className="origin-top sm:scale-125 print:scale-100">
           <StudentCard s={card} schoolName={user.school.name} />
         </div>
       </div>
