@@ -44,16 +44,37 @@ export function text(html: string): string {
  * After a no-JS form post, Next.js puts the action's result (e.g. an
  * error message) there instead of in the plain HTML.
  */
+const SKIP_PROPS = new Set(["className", "style", "href", "src", "rel", "as", "type", "name", "content", "precedence", "crossOrigin", "nonce", "dangerouslySetInnerHTML"]);
+
 export function rscText(html: string): string {
   const out: string[] = [];
   const walk = (v: unknown) => {
-    if (typeof v === "string") out.push(v);
+    // Keep human-readable strings only (skip React's internal references like "$L1f").
+    if (typeof v === "string") {
+      if (!v.startsWith("$") && !v.startsWith("/_next/") && /\s|^[\w.,!?'’:@-]+$/.test(v)) out.push(v);
+    }
     else if (Array.isArray(v)) v.forEach(walk);
-    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+    else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) if (!SKIP_PROPS.has(k)) walk(x);
+    }
   };
   for (const m of html.matchAll(/self\.__next_f\.push\((\[[\s\S]*?\])\)<\/script>/g)) {
     try {
-      walk(JSON.parse(m[1]));
+      const chunk = JSON.parse(m[1]);
+      // [1, "<flight text>"]: parse each "id:json" row so only real values remain.
+      if (chunk[0] === 1 && typeof chunk[1] === "string") {
+        for (const line of chunk[1].split("\n")) {
+          const row = /^[0-9a-f]+:(.*)$/.exec(line);
+          if (!row) continue;
+          try {
+            walk(JSON.parse(row[1]));
+          } catch {
+            /* not JSON (module refs etc.) */
+          }
+        }
+        continue;
+      }
+      walk(chunk);
     } catch {
       /* ignore partial chunks */
     }
