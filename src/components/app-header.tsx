@@ -1,13 +1,16 @@
+import Link from "next/link";
 import { logout } from "@/lib/auth/actions";
 
 type Props = {
   panelName: string;
   userName: string;
   subtitle?: string;
+  /** Link to the signed-in user's "My account" page. */
+  accountHref: string;
 };
 
 /** Top bar shared by both panels: panel name, who is signed in, sign out. */
-export function AppHeader({ panelName, userName, subtitle }: Props) {
+export function AppHeader({ panelName, userName, subtitle, accountHref }: Props) {
   return (
     <HeaderFrame>
       <div>
@@ -15,7 +18,9 @@ export function AppHeader({ panelName, userName, subtitle }: Props) {
         {subtitle && <p className="text-xs text-slate-500">{subtitle}</p>}
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-sm text-slate-600">{userName}</span>
+        <Link href={accountHref} className="text-sm text-slate-600 hover:text-slate-900 hover:underline" title="My account">
+          {userName}
+        </Link>
         <form action={logout}>
           <button
             type="submit"

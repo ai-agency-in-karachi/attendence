@@ -5,11 +5,15 @@ import { systemDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import {
   getDummyHash,
+  hashPassword,
   verifyPassword,
   PASSWORD_MAX_LENGTH,
 } from "@/lib/auth/password";
+import { changeOwnPasswordSchema } from "@/lib/validation/school";
+import { invalid, type FormState } from "@/lib/form";
 import {
   createSession,
+  destroyAllSessionsForUser,
   destroyCurrentSession,
   getClientIp,
 } from "@/lib/auth/session";
@@ -156,4 +160,46 @@ export async function logout(): Promise<void> {
     });
   }
   redirect("/login");
+}
+
+/** Any signed-in user changes their own password (needs the current one). */
+export async function changeOwnPassword(_prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const parsed = changeOwnPasswordSchema.safeParse({
+    currentPassword: formData.get("currentPassword") ?? "",
+    newPassword: formData.get("newPassword") ?? "",
+    confirmPassword: formData.get("confirmPassword") ?? "",
+  });
+  if (!parsed.success) return invalid(parsed.error);
+
+  // System scope, limited to the verified session's own user id.
+  const current = await systemDb((tx) =>
+    tx.user.findUnique({ where: { id: user.id }, select: { passwordHash: true } }),
+  );
+  if (!current || !(await verifyPassword(parsed.data.currentPassword, current.passwordHash))) {
+    const msg = "Your current password is not correct.";
+    return { error: msg, fieldErrors: { currentPassword: [msg] } };
+  }
+
+  const passwordHash = await hashPassword(parsed.data.newPassword);
+  await systemDb((tx) =>
+    tx.user.update({
+      where: { id: user.id },
+      data: { passwordHash, passwordChangedAt: new Date() },
+    }),
+  );
+  // Sign out every other device, then give this browser a fresh session.
+  await destroyAllSessionsForUser(user.id);
+  await createSession(user.id);
+  await writeAudit({
+    action: "user.change_own_password",
+    schoolId: user.school?.id ?? null,
+    actorUserId: user.id,
+    entityType: "user",
+    entityId: user.id,
+    ipAddress: await getClientIp(),
+  });
+  return { ok: true, message: "Password changed. You were signed out on all other devices." };
 }

@@ -23,5 +23,5 @@ export default function SuperAdminLayout({ children }: LayoutProps<"/super-admin
 
 async function Header() {
   const user = await requireSuperAdmin();
-  return <AppHeader panelName="Super Admin" userName={user.fullName} subtitle="Platform management" />;
+  return <AppHeader panelName="Super Admin" userName={user.fullName} accountHref="/super-admin/account" subtitle="Platform management" />;
 }

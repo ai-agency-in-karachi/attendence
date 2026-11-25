@@ -138,3 +138,15 @@ export function formatDateTime(d: Date, timeZone = "UTC"): string {
     timeZone,
   }).format(d);
 }
+
+/** Shows a form action's general error or success message. */
+export function FormMessage({ state }: { state: { error?: string; message?: string } | undefined }) {
+  if (state?.error) return <Alert tone="error">{state.error}</Alert>;
+  if (state?.message) return <Alert tone="success">{state.message}</Alert>;
+  return null;
+}
+
+/** aria attributes linking an input to its error message. */
+export function ariaFor(error: string | undefined, id: string) {
+  return error ? ({ "aria-invalid": true, "aria-describedby": `${id}-error` } as const) : {};
+}

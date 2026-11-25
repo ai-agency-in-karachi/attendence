@@ -9,6 +9,9 @@ import { utcOffsetLabel } from "@/lib/timezones";
 import { PageSkeleton } from "@/components/page-skeleton";
 import { Alert, Card, CardHeader, PageHeader, StatusBadge, formatDateTime } from "@/components/ui";
 import { StatusControl } from "./status-control";
+import { AddAdminForm, AdminRowActions } from "./admin-controls";
+import { ButtonLink } from "@/components/ui";
+import { formatBytes } from "@/lib/format";
 
 export const metadata: Metadata = { title: "School" };
 
@@ -23,7 +26,9 @@ export default function SchoolDetailPage(props: PageProps<"/super-admin/schools/
 async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/schools/[id]">) {
   const user = await requireSuperAdmin();
   const { id } = await params;
-  const created = (await searchParams).created === "1";
+  const sp = await searchParams;
+  const created = sp.created === "1";
+  const saved = sp.saved === "1";
 
   const schoolId = /^\d{1,9}$/.test(id) ? Number(id) : NaN;
   if (!Number.isSafeInteger(schoolId)) notFound();
@@ -48,6 +53,7 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
     ["Contact email", school.contactEmail ?? "—"],
     ["Contact phone", school.contactPhone ?? "—"],
     ["Address", school.address ?? "—"],
+    ["Custom storage quota", school.storageQuotaOverrideBytes ? formatBytes(school.storageQuotaOverrideBytes) : "None (uses plan limit)"],
     ["Added", formatDateTime(school.createdAt, PLATFORM_TIME_ZONE)],
   ];
 
@@ -63,8 +69,20 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
             / {school.name}
           </>
         }
-        actions={<StatusBadge status={school.status} />}
+        actions={
+          <>
+            <StatusBadge status={school.status} />
+            <ButtonLink href={`/super-admin/schools/${school.id}/edit`} variant="secondary">
+              Edit details
+            </ButtonLink>
+          </>
+        }
       />
+      {saved && (
+        <div className="mb-6">
+          <Alert tone="success">Changes saved.</Alert>
+        </div>
+      )}
 
       {created && (
         <div className="mb-6">
@@ -91,9 +109,7 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
           <Card>
             <CardHeader title={`School Admins (${school.users.length})`} />
             {school.users.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-slate-500">
-                No admin logins yet. Adding admins from here arrives in the next step (Phase 4b).
-              </p>
+              <p className="px-5 py-6 text-sm text-slate-500">No admin logins yet. Add one below.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -102,7 +118,8 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
                       <th scope="col" className="px-5 py-2 font-medium">Name</th>
                       <th scope="col" className="px-3 py-2 font-medium">Email</th>
                       <th scope="col" className="px-3 py-2 font-medium">Status</th>
-                      <th scope="col" className="px-5 py-2 font-medium">Last sign-in</th>
+                      <th scope="col" className="px-3 py-2 font-medium">Last sign-in</th>
+                      <th scope="col" className="px-5 py-2 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -117,8 +134,11 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
                             <span className="text-slate-500">Disabled</span>
                           )}
                         </td>
-                        <td className="whitespace-nowrap px-5 py-3 text-slate-600">
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">
                           {u.lastLoginAt ? formatDateTime(u.lastLoginAt, PLATFORM_TIME_ZONE) : "Never"}
+                        </td>
+                        <td className="px-5 py-3">
+                          <AdminRowActions userId={u.id} email={u.email} isActive={u.isActive} />
                         </td>
                       </tr>
                     ))}
@@ -126,6 +146,9 @@ async function SchoolDetail({ params, searchParams }: PageProps<"/super-admin/sc
                 </table>
               </div>
             )}
+            <div className="border-t border-slate-100 p-5">
+              <AddAdminForm schoolId={school.id} />
+            </div>
           </Card>
         </div>
 

@@ -15,5 +15,5 @@ export default function SchoolLayout({ children }: LayoutProps<"/school">) {
 
 async function Header() {
   const user = await requireSchoolAdmin();
-  return <AppHeader panelName={user.school.name} userName={user.fullName} subtitle="School Admin" />;
+  return <AppHeader panelName={user.school.name} userName={user.fullName} accountHref="/school/account" subtitle="School Admin" />;
 }
