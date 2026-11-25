@@ -24,3 +24,18 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ---------- Printing (student cards, register) ---------- */
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  .student-card {
+    break-inside: avoid;
+  }
+}
